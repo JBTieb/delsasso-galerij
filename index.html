@@ -96,7 +96,14 @@
   body.scheme-drag.playing #menuBtn, body.scheme-touch.playing #menuBtn { display: block; }
   body.scheme-touch #hint, body.scheme-drag #hint { left: 80px; }
   body.scheme-touch #prompt { pointer-events: auto; }
-  #joy { position: fixed; z-index: 6; width: 110px; height: 110px; margin: -55px; border-radius: 50%; border: 3px solid rgba(255,255,255,.7); background: rgba(255,255,255,.15); display: none; pointer-events: none; }
+  #joy { position: fixed; z-index: 6; left: 22px; bottom: calc(30px + env(safe-area-inset-bottom)); width: 132px; height: 132px; border-radius: 50%; border: 3px solid rgba(255,255,255,.8); background: rgba(58,33,64,.32); box-shadow: 0 4px 16px rgba(0,0,0,.25); display: none; pointer-events: none; }
+  body.scheme-touch.playing #joy { display: block; }
+  #joyKnob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(255,250,240,.92); box-shadow: 0 2px 8px rgba(0,0,0,.35); transition: transform .12s; }
+  #joy.held #joyKnob { transition: none; }
+  #joy::after { content: 'lopen'; position: absolute; left: 0; right: 0; bottom: -22px; text-align: center; color: #fff; font-size: 13px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+  body.scheme-touch #menuBtn { left: auto; right: 16px; bottom: calc(30px + env(safe-area-inset-bottom)); }
+  body.scheme-touch #hint { left: 16px; right: 16px; bottom: calc(240px + env(safe-area-inset-bottom)); }
+  body.scheme-touch #prompt { bottom: calc(182px + env(safe-area-inset-bottom)); }   /* above the walk circle */
 
   /* ---------- Dot-painting mini-game ---------- */
   .painter-card { width: min(900px, 100%); border-top-color: var(--turq); padding: 22px 26px; }
@@ -166,7 +173,7 @@
 <div id="fade"></div>
 <div id="flash"></div>
 <button id="menuBtn" title="Menu">☰</button>
-<div id="joy"></div>
+<div id="joy"><div id="joyKnob"></div></div>
 
 <!-- ============ Intro / instructions ============ -->
 <div id="intro" class="overlay">
@@ -1298,7 +1305,9 @@ renderer.shadowMap.autoUpdate = false;   // the gallery is static: render the sh
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 800);   // far enough for the sky domes of the outdoor worlds
 // A phone held upright gets a wider view, otherwise you only see a narrow strip of the room.
-function fitCamera() { camera.aspect = window.innerWidth / window.innerHeight; camera.fov = camera.aspect < 0.8 ? 90 : camera.aspect < 1.2 ? 78 : 70; camera.updateProjectionMatrix(); }
+let zoom = 1;   // > 1 = zoomed out (a wider view), < 1 = zoomed in
+function fitCamera() { camera.aspect = window.innerWidth / window.innerHeight; camera.fov = clamp((camera.aspect < 0.8 ? 90 : camera.aspect < 1.2 ? 78 : 70) * zoom, 35, 105); camera.updateProjectionMatrix(); }
+function setZoom(z) { zoom = clamp(z, 0.6, 1.45); fitCamera(); }
 fitCamera();
 camera.rotation.order = 'YXZ';
 
@@ -1313,7 +1322,7 @@ window.addEventListener('resize', () => {
 
 const player = { pos: new THREE.Vector3(0, 0, 7.6), vel: new THREE.Vector3(), yaw: 0, pitch: 0, bob: 0, stepDist: 0, ground: 0, jump: 0, vy: 0 };
 const keys = {};
-const touch = { move: { x: 0, y: 0 }, moveId: null, lookId: null, ox: 0, oy: 0, lx: 0, ly: 0, t0: 0, moved: 0 };
+const touch = { move: { x: 0, y: 0 }, moveId: null, looks: new Map(), pinch: null };   // looks: the fingers that look around (or pinch to zoom)
 
 // mode: 'intro' | 'play' | 'pause' | 'minigame'.  scheme: how the visitor looks around.
 let mode = 'intro';
@@ -1426,7 +1435,7 @@ function setMode(m) {
   $('#painter').classList.toggle('hidden', !(m === 'minigame' && overlayId === 'painter'));
   $('#game').classList.toggle('hidden', !(m === 'minigame' && overlayId === 'game'));
   $('#titles').classList.toggle('hidden', !(m === 'minigame' && overlayId === 'titles'));
-  if (m !== 'play') { for (const k in keys) keys[k] = false; touch.move.x = touch.move.y = 0; touch.moveId = touch.lookId = null; $('#joy').style.display = 'none'; }
+  if (m !== 'play') { for (const k in keys) keys[k] = false; touch.move.x = touch.move.y = 0; touch.moveId = null; touch.looks.clear(); setKnob(0, 0); }
 }
 function requestLock() {
   try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(onLockFailed); }
@@ -1475,6 +1484,8 @@ window.addEventListener('keydown', e => {
     else if (e.code === 'KeyM') $('#minimapWrap').classList.toggle('hidden');
     else if (e.code === 'KeyG') { const on = audio.toggle(); toast(on ? 'Geluid aan' : 'Geluid uit', 1400); syncSoundButton(); }
     else if (e.code === 'KeyF') wantPhoto = true;
+    else if (e.code === 'Minus' || e.code === 'NumpadSubtract') setZoom(zoom * 1.12);   // zoom out
+    else if (e.code === 'Equal' || e.code === 'NumpadAdd') setZoom(zoom / 1.12);        // zoom in
     else if (e.code === 'KeyL') setNight(!night.on);
     else if (e.code === 'KeyT') openTitles((panelItem && panelItem.work) || (target && target.work) || null);
     else if (e.code === 'Escape' && scheme !== 'lock') setMode('pause');
@@ -1560,7 +1571,21 @@ function clickAt(cx, cy) {
   let { x, z } = hit.point;
   if (hit.normal && hit.normal.y < -0.5) return;                                                            // the ceiling
   if (hit.normal && Math.abs(hit.normal.y) < 0.5) { x += hit.normal.x * 0.7; z += hit.normal.z * 0.7; }     // a wall: stop just in front of it
-  audio.note(660, 0.02, 0.2); walkTo(x, z);
+  let face = null, pitch = 0;
+  if (hit.normal && hit.normal.y > 0.5) {   // the floor: close to a work on the wall? then keep some distance and look at it
+    let best = null, bestD = 2.2;
+    for (const it of world.interactables) {
+      if (!it.normal || !it.work || it.pos.y < -50) continue;
+      const ox = x - it.pos.x, oz = z - it.pos.z, ahead = ox * it.normal.x + oz * it.normal.z, side = Math.abs(ox * it.normal.z - oz * it.normal.x);
+      if (ahead > 0 && ahead < bestD && side < Math.max(...it.work.size) / 2 + 0.5) { best = it; bestD = ahead; }
+    }
+    if (best) {
+      const want = clamp(Math.hypot(...best.work.size) * 0.95, 1.8, 3.2);
+      if (bestD < want) { x += best.normal.x * (want - bestD); z += best.normal.z * (want - bestD); }
+      face = Math.atan2(best.normal.x, best.normal.z); pitch = clamp(Math.atan2(best.pos.y - CONFIG.eyeHeight, want), -0.4, 0.3);
+    }
+  }
+  audio.note(660, 0.02, 0.2); walkTo(x, z, face === null ? {} : { face, pitch });
 }
 function stepForward(dist) {   // the mouse wheel: a step forward or back, without turning
   const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
@@ -1626,43 +1651,54 @@ window.addEventListener('mouseup', e => {
 });
 canvas.addEventListener('wheel', e => {
   if (mode !== 'play' || document.pointerLockElement === canvas) return;
-  e.preventDefault(); stepForward(e.deltaY < 0 ? 1.4 : -1.0);
+  e.preventDefault();
+  if (e.ctrlKey) return setZoom(zoom * (e.deltaY > 0 ? 1.08 : 1 / 1.08));   // Ctrl + wheel (and a touchpad pinch) = zoom
+  stepForward(e.deltaY < 0 ? 1.4 : -1.0);
 }, { passive: false });
 
-/* ---- Touch: tap = walk there (or walk up to a work), swipe = look around, hold and drag on the left = walk (joystick) ---- */
+/* ---- Touch: the circle bottom left = walk; elsewhere: swipe = look around, tap = walk there (or up to a work),
+        two fingers = pinch to zoom out or in ---- */
+function setKnob(dx, dy) { const k = $('#joyKnob'); if (k) k.style.transform = `translate(${dx}px, ${dy}px)`; $('#joy').classList.toggle('held', !!(dx || dy)); }
+function joyCentre() { const r = $('#joy').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.width / 2 }; }
 canvas.addEventListener('touchstart', e => {
   e.preventDefault(); if (mode !== 'play') return;
   if (scheme !== 'touch') setScheme('touch');
+  const c = joyCentre();
   for (const t of e.changedTouches) {
-    if (t.clientX < window.innerWidth * 0.45 && touch.moveId === null) {
-      touch.moveId = t.identifier; touch.ox = t.clientX; touch.oy = t.clientY; touch.m0 = performance.now();
-      const j = $('#joy'); j.style.left = t.clientX + 'px'; j.style.top = t.clientY + 'px';
-    } else if (touch.lookId === null) {
-      touch.lookId = t.identifier; touch.lx = t.clientX; touch.ly = t.clientY; touch.t0 = performance.now(); touch.moved = 0;
-    }
+    if (touch.moveId === null && Math.hypot(t.clientX - c.x, t.clientY - c.y) < c.r + 30) touch.moveId = t.identifier;   // a finger on the walk circle
+    else touch.looks.set(t.identifier, { x: t.clientX, y: t.clientY, t0: performance.now(), moved: 0 });
+    if (touch.moveId === t.identifier) { touch.joy = c; moveJoy(t); }
   }
+  if (touch.looks.size >= 2) touch.pinch = null;   // starts a fresh pinch
 }, { passive: false });
+function moveJoy(t) {
+  const c = touch.joy, dx = t.clientX - c.x, dy = t.clientY - c.y, d = Math.hypot(dx, dy), max = c.r - 10, k = d > max ? max / d : 1;
+  setKnob(dx * k, dy * k);
+  const dead = 0.12, mx = dx * k / max, my = dy * k / max, m = Math.hypot(mx, my);
+  touch.move.x = m < dead ? 0 : mx; touch.move.y = m < dead ? 0 : -my;
+}
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
   for (const t of e.changedTouches) {
-    if (t.identifier === touch.moveId) {
-      if (Math.hypot(t.clientX - touch.ox, t.clientY - touch.oy) < 12) continue;   // not dragging yet: it may still be a tap
-      $('#joy').style.display = 'block';
-      touch.move.x = clamp((t.clientX - touch.ox) / 55, -1, 1); touch.move.y = clamp(-(t.clientY - touch.oy) / 55, -1, 1);
-    } else if (t.identifier === touch.lookId) {
-      const dx = t.clientX - touch.lx, dy = t.clientY - touch.ly;
-      look(dx, dy, 0.005); touch.moved += Math.abs(dx) + Math.abs(dy); touch.lx = t.clientX; touch.ly = t.clientY;
-    }
+    if (t.identifier === touch.moveId) { moveJoy(t); continue; }
+    const f = touch.looks.get(t.identifier); if (!f) continue;
+    const dx = t.clientX - f.x, dy = t.clientY - f.y; f.x = t.clientX; f.y = t.clientY; f.moved += Math.abs(dx) + Math.abs(dy);
+    if (touch.looks.size === 1) look(dx, dy, 0.005);
+  }
+  if (touch.looks.size >= 2) {   // pinch: fingers apart = zoom in, together = zoom out (a wider view)
+    const [a, b] = [...touch.looks.values()], dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (touch.pinch) setZoom(zoom * Math.pow(touch.pinch / dist, 0.6));   // a calm zoom, not all at once
+    touch.pinch = dist; a.moved = b.moved = 99;
   }
 }, { passive: false });
 const endTouch = e => {
   for (const t of e.changedTouches) {
-    if (t.identifier === touch.moveId) {
-      const tap = performance.now() - touch.m0 < 300 && Math.hypot(t.clientX - touch.ox, t.clientY - touch.oy) < 12;
-      touch.moveId = null; touch.move.x = touch.move.y = 0; $('#joy').style.display = 'none';
-      if (tap) clickAt(t.clientX, t.clientY);
-    } else if (t.identifier === touch.lookId) { touch.lookId = null; if (performance.now() - touch.t0 < 300 && touch.moved < 12) clickAt(t.clientX, t.clientY); }
+    if (t.identifier === touch.moveId) { touch.moveId = null; touch.move.x = touch.move.y = 0; setKnob(0, 0); continue; }
+    const f = touch.looks.get(t.identifier); if (!f) continue;
+    touch.looks.delete(t.identifier);
+    if (touch.looks.size === 0 && performance.now() - f.t0 < 300 && f.moved < 12) clickAt(t.clientX, t.clientY);   // a tap
   }
+  if (touch.looks.size < 2) touch.pinch = null;
 };
 canvas.addEventListener('touchend', endTouch); canvas.addEventListener('touchcancel', endTouch);
 
@@ -4239,15 +4275,15 @@ function toast(msg, ms = 3200) {
 function renderHint() {
   const inside = world && world.id !== 'gallery', home = inside ? 'terug naar de galerij' : 'terug naar de entree';
   $('#hint').innerHTML = scheme === 'touch'
-    ? '<b>Tik</b> op de vloer om erheen te lopen · <b>tik</b> op een kunstwerk om het te bekijken<br><b>Veeg</b> om rond te kijken · links vasthouden en slepen = lopen'
+    ? '<b>Rondje linksonder</b> = lopen · <b>veeg</b> = rondkijken<br><b>Tik</b> op de vloer of een kunstwerk om erheen te gaan · <b>knijp</b> met twee vingers om uit te zoomen'
     : scheme === 'drag'
-      ? `<b>Klik</b> op de vloer om erheen te lopen · <b>klik</b> op een kunstwerk om het te bekijken<br><b>Muis ingedrukt slepen</b> = rondkijken · <b>wieltje</b> = stapje · of <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · <kbd>H</kbd> ${home} · <kbd>Esc</kbd> menu`
+      ? `<b>Klik</b> op de vloer om erheen te lopen · <b>klik</b> op een kunstwerk om het te bekijken<br><b>Muis ingedrukt slepen</b> = rondkijken · <b>wieltje</b> = stapje · <kbd>−</kbd> <kbd>+</kbd> uit- en inzoomen · of <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · <kbd>H</kbd> ${home} · <kbd>Esc</kbd> menu`
       : `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / pijltjes lopen · <b>muis</b> rondkijken · <kbd>E</kbd> bekijken · <kbd>Spatie</kbd> springen<br><kbd>H</kbd> ${home} · <kbd>F</kbd> foto · <kbd>L</kbd> avondlicht · <kbd>M</kbd> kaart · <kbd>G</kbd> geluid · <kbd>Esc</kbd> pauze`;
 }
 const CONTROLS = {
-  drag: '<li><span class="what">Lopen</span>klik op de vloer waar je heen wilt</li><li><span class="what">Kunstwerk bekijken</span>klik erop</li><li><span class="what">Rondkijken</span>houd de muis ingedrukt en sleep</li><li><span class="what">Een stapje</span>het wieltje van de muis</li><li><span class="what">Met toetsen</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> of de pijltjes</li><li><span class="what">Menu</span><kbd>Esc</kbd> of de knop linksonder</li>',
+  drag: '<li><span class="what">Lopen</span>klik op de vloer waar je heen wilt</li><li><span class="what">Kunstwerk bekijken</span>klik erop</li><li><span class="what">Rondkijken</span>houd de muis ingedrukt en sleep</li><li><span class="what">Een stapje</span>het wieltje van de muis</li><li><span class="what">Uit- en inzoomen</span><kbd>−</kbd> en <kbd>+</kbd></li><li><span class="what">Met toetsen</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> of de pijltjes</li><li><span class="what">Menu</span><kbd>Esc</kbd> of de knop linksonder</li>',
   lock: '<li><span class="what">Lopen</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> of de pijltjes</li><li><span class="what">Rondkijken</span>beweeg de muis</li><li><span class="what">Kunstwerk bekijken</span><kbd>E</kbd> of klik met de muis</li><li><span class="what">Sneller lopen</span><kbd>Shift</kbd> ingedrukt houden</li><li><span class="what">Springen</span><kbd>Spatie</kbd></li><li><span class="what">Foto maken</span><kbd>F</kbd></li><li><span class="what">Avondlicht</span><kbd>L</kbd></li><li><span class="what">Pauze / muis terug</span><kbd>Esc</kbd></li>',
-  touch: '<li><span class="what">Lopen</span>tik op de vloer waar je heen wilt</li><li><span class="what">Kunstwerk bekijken</span>tik erop</li><li><span class="what">Rondkijken</span>veeg met je vinger</li><li><span class="what">Menu</span>de knop linksonder</li>',
+  touch: '<li><span class="what">Lopen</span>duim op het rondje linksonder, of tik op de vloer</li><li><span class="what">Rondkijken</span>veeg met je andere vinger</li><li><span class="what">Kunstwerk bekijken</span>tik erop</li><li><span class="what">Uitzoomen</span>knijp met twee vingers</li><li><span class="what">Menu</span>de knop rechtsonder</li>',
 };
 function syncControlsBtn() { $('#controlsBtn').textContent = scheme === 'lock' ? 'Besturing: als een spel (muis vast)' : 'Besturing: makkelijk (klikken)'; $('#controlsBtn').classList.toggle('hidden', scheme === 'touch'); $('#controlsList').innerHTML = CONTROLS[scheme]; }
 function syncSoundButton() { $('#soundBtn').textContent = 'Geluid: ' + (audio.on ? 'aan' : 'uit'); $('#musicBtn').textContent = 'Muziek: ' + (audio.musicOn ? 'aan' : 'uit'); }
