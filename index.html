@@ -1563,7 +1563,8 @@ function galleryRoute(sx, sz, gx, gz) {
 function walkTo(x, z, opt = {}) {
   turnTo = null;
   const pts = world.id === 'gallery' ? galleryRoute(player.pos.x, player.pos.z, x, z) : [[x, z]];
-  auto = { pts, face: opt.face ?? null, pitch: opt.pitch ?? 0, then: opt.then || null, turn: opt.turn !== false, best: Infinity, since: performance.now() };
+  auto = { pts, face: opt.face ?? null, pitch: opt.pitch ?? 0, then: opt.then || null, turn: opt.turn !== false, lookAt: opt.lookAt || null, best: Infinity, since: performance.now() };
+  if (auto.lookAt && auto.face !== null) auto.turnSign = Math.sign(angleDiff(auto.face, player.yaw));   // the view only turns this way, never back
   if (opt.marker !== false) showMarker(x, z);
 }
 function enterItem(it) { if (it.enter) { if (!it.keepPanel) closePanel(); it.enter(); } else closePanel(); }
@@ -1579,7 +1580,7 @@ function goToItem(it) {
   const face = Math.atan2(x - it.pos.x, z - it.pos.z), pitch = clamp(Math.atan2(it.pos.y - CONFIG.eyeHeight - player.ground, back), -0.75, 0.35);
   const then = () => { if (it.action) it.action(); else openPanel(it); };
   if (Math.hypot(x - player.pos.x, z - player.pos.z) < 0.35) { turnTo = { yaw: face, pitch, then }; return; }
-  walkTo(x, z, { face, pitch, then, marker: false });
+  walkTo(x, z, { face, pitch, then, marker: false, lookAt: it.pos });
 }
 function clickAt(cx, cy) {
   if (mode !== 'play' || transitioning) return;
@@ -1589,7 +1590,7 @@ function clickAt(cx, cy) {
   let { x, z } = hit.point;
   if (hit.normal && hit.normal.y < -0.5) return;                                                            // the ceiling
   if (hit.normal && Math.abs(hit.normal.y) < 0.5) { x += hit.normal.x * 0.7; z += hit.normal.z * 0.7; }     // a wall: stop just in front of it
-  let face = null, pitch = 0;
+  let face = null, pitch = 0, lookAt = null;
   if (hit.normal && hit.normal.y > 0.5) {   // the floor: close to a work on the wall? then keep some distance and look at it
     let best = null, bestD = 2.2;
     for (const it of world.interactables) {
@@ -1600,10 +1601,10 @@ function clickAt(cx, cy) {
     if (best) {
       const want = clamp(Math.hypot(...best.work.size) * 0.95, 1.8, 3.2);
       if (bestD < want) { x += best.normal.x * (want - bestD); z += best.normal.z * (want - bestD); }
-      face = Math.atan2(best.normal.x, best.normal.z); pitch = clamp(Math.atan2(best.pos.y - CONFIG.eyeHeight, want), -0.4, 0.3);
+      lookAt = best.pos; face = Math.atan2(best.normal.x, best.normal.z); pitch = clamp(Math.atan2(best.pos.y - CONFIG.eyeHeight, want), -0.4, 0.3);
     }
   }
-  audio.note(660, 0.02, 0.2); walkTo(x, z, face === null ? {} : { face, pitch });
+  audio.note(660, 0.02, 0.2); walkTo(x, z, face === null ? {} : { face, pitch, lookAt });
 }
 function stepForward(dist) {   // the mouse wheel: a step forward or back, without turning
   const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
@@ -1626,7 +1627,7 @@ function autoSteer(dt, manual) {
     return [0, 0];
   }
   if (!auto) return null;
-  const arrive = () => { const a = auto; auto = null; hideMarker(); if (a.face !== null) turnTo = { yaw: a.face, pitch: a.pitch, then: a.then }; else a.then?.(); return [0, 0]; };
+  const arrive = () => { const a = auto; auto = null; hideMarker(); player.vel.multiplyScalar(0.2); if (a.face !== null) turnTo = { yaw: a.face, pitch: a.pitch, then: a.then }; else a.then?.(); return [0, 0]; };
   let [x, z] = auto.pts[0], dx = x - player.pos.x, dz = z - player.pos.z, d = Math.hypot(dx, dz);
   while (d < (auto.pts.length > 1 ? 0.5 : 0.15)) {
     auto.pts.shift(); auto.best = Infinity; auto.since = performance.now();
@@ -1639,7 +1640,12 @@ function autoSteer(dt, manual) {
     auto.pts.shift(); auto.best = Infinity; auto.since = now;
     if (!auto.pts.length) return arrive();
   }
-  if (auto.turn) { player.yaw += angleDiff(Math.atan2(-dx, -dz), player.yaw) * Math.min(1, dt * 4); player.pitch *= 1 - Math.min(1, dt * 2.5); }
+  if (auto.lookAt) {   // walking up to a work: keep looking at it, so the view does not swing away and back
+    const lx = auto.lookAt.x - player.pos.x, lz = auto.lookAt.z - player.pos.z;
+    const step = angleDiff(Math.atan2(-lx, -lz), player.yaw) * Math.min(1, dt * 5);
+    if (Math.hypot(lx, lz) > 0.3 && (!auto.turnSign || Math.sign(step) === auto.turnSign)) player.yaw += step;
+    player.pitch += (auto.pitch - player.pitch) * Math.min(1, dt * 2);
+  } else if (auto.turn && d > 0.8) { player.yaw += angleDiff(Math.atan2(-dx, -dz), player.yaw) * Math.min(1, dt * 4); player.pitch *= 1 - Math.min(1, dt * 2.5); }   // not in the last stretch: no wobble at the end
   const speed = CONFIG.walkSpeed * (world.speed || 1) * Math.min(1, 0.35 + d / 1.2);
   return [dx / d * speed, dz / d * speed];
 }
@@ -3712,6 +3718,7 @@ function fade(midway) {
   setTimeout(() => { midway(); $('#fade').style.opacity = 0; setTimeout(() => { transitioning = false; }, 460); }, 480);
 }
 function placePlayer(x, z, yaw) {
+  auto = turnTo = null; hideMarker();   // a jump to another place ends any walk that was still going
   player.pos.set(x, 0, z); player.vel.set(0, 0, 0); player.yaw = yaw; player.pitch = 0;
   player.ground = world && world.heightAt ? world.heightAt(x, z) : 0; player.jump = player.vy = 0;
 }
