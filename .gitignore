@@ -1,0 +1,8 @@
+# kept local: the double-click build, the desktop shortcut files and comparison sheets
+Delsasso Galerij (los bestand).html
+Start galerij.cmd
+galerij.ico
+tapijt-*.jpg
+# photos of the Kop van WaZ (no longer in the gallery)
+afbeeldingen/kopvanwaz-*
+__pycache__/
