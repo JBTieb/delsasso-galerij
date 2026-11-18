@@ -46,7 +46,9 @@
   #prompt kbd { display: inline-block; background: var(--sun); color: var(--ink); border-radius: 999px; padding: 2px 12px; margin-right: 10px; font: inherit; font-weight: 600; }
 
   #hint { left: 16px; bottom: 16px; background: rgba(58,33,64,.78); color: #fff; padding: 10px 16px; border-radius: 14px; font-size: 14px; line-height: 1.65; transition: opacity 1.2s; }
-  #hint.gone { opacity: 0 !important; }
+  #hint.gone { opacity: 0 !important; pointer-events: none !important; }
+  #hint { pointer-events: auto; padding-right: 44px; cursor: pointer; }
+  #hintClose { position: absolute; top: 7px; right: 7px; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 17px; line-height: 28px; background: rgba(255,255,255,.22); color: #fff; box-shadow: none; }
   #hint b { color: var(--sun); font-weight: 600; }
 
   /* Info panel that slides in next to an artwork */
@@ -150,6 +152,14 @@
     .card { padding: 20px 18px; } .card h1 { font-size: 26px; } .slogan { font-size: 36px; }
     .controls { font-size: 15px; line-height: 1.45; display: block; } .controls li { display: flex; gap: 10px; margin: 7px 0; } .controls .what { flex: none; width: 42%; }
     #panel { top: auto; bottom: 90px; transform: translate(115%, 0); } #panel.open { transform: translate(0, 0); }
+    .painter-card { padding: 14px 12px 0; } .painter-card h2 { font-size: 22px; margin: 0; } .painter-card > p { font-size: 13px; line-height: 1.35; margin: 4px 0 6px; }
+    #paintCanvas, #gameCanvas { width: min(calc(100vw - 52px), 44vh); height: auto; aspect-ratio: auto; }
+    .painter-body { gap: 10px; margin-top: 4px; }
+    .tools { width: 100%; gap: 8px; } .tools .label { font-size: 13px; margin-bottom: 2px; }
+    .swatch { width: 27px; height: 27px; } .opt { padding: 5px 10px; font-size: 13px; }
+    .tools .actions { position: sticky; bottom: 0; z-index: 2; flex-direction: row; flex-wrap: wrap; gap: 6px; margin: 0 -12px; padding: 8px 12px 12px; background: var(--cream); box-shadow: 0 -10px 14px -10px rgba(58,33,64,.35); }
+    .tools .actions button { flex: 1 1 auto; padding: 9px 10px; font-size: 13px; }
+    .tools .actions button.primary { flex-basis: 100%; order: -1; font-size: 16px; padding: 11px; }
   }
 </style>
 <script type="importmap">
@@ -1465,7 +1475,7 @@ function startPlaying() {
   audio.init();
   if (firstStart) {
     firstStart = false; player.yaw = world.spawn.yaw; player.pitch = 0;
-    setTimeout(() => $('#hint').classList.add('gone'), 16000);
+    if (store.get('hintClosed', false)) $('#hint').classList.add('gone'); else setTimeout(() => $('#hint').classList.add('gone'), 20000);
   }
   $('#pauseMsg').textContent = 'Klik op “Verder kijken” om weer rond te lopen.';
   if (scheme === 'lock') {
@@ -4283,11 +4293,11 @@ function toast(msg, ms = 3200) {
 }
 function renderHint() {
   const inside = world && world.id !== 'gallery', home = inside ? 'terug naar de galerij' : 'terug naar de entree';
-  $('#hint').innerHTML = scheme === 'touch'
+  $('#hint').innerHTML = '<button id="hintClose" title="Tips sluiten" aria-label="Tips sluiten">×</button>' + (scheme === 'touch'
     ? '<b>Rondje linksonder</b> = lopen · <b>veeg</b> = rondkijken<br><b>Tik</b> op de vloer of een kunstwerk om erheen te gaan · <b>knijp</b> met twee vingers om uit te zoomen'
     : scheme === 'drag'
       ? `<b>Klik</b> op de vloer om erheen te lopen · <b>klik</b> op een kunstwerk om het te bekijken<br><b>Muis ingedrukt slepen</b> = rondkijken · <b>wieltje</b> = stapje · <kbd>−</kbd> <kbd>+</kbd> uit- en inzoomen · of <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · <kbd>H</kbd> ${home} · <kbd>Esc</kbd> menu`
-      : `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / pijltjes lopen · <b>muis</b> rondkijken · <kbd>E</kbd> bekijken · <kbd>Spatie</kbd> springen<br><kbd>H</kbd> ${home} · <kbd>F</kbd> foto · <kbd>L</kbd> avondlicht · <kbd>M</kbd> kaart · <kbd>G</kbd> geluid · <kbd>Esc</kbd> pauze`;
+      : `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / pijltjes lopen · <b>muis</b> rondkijken · <kbd>E</kbd> bekijken · <kbd>Spatie</kbd> springen<br><kbd>H</kbd> ${home} · <kbd>F</kbd> foto · <kbd>L</kbd> avondlicht · <kbd>M</kbd> kaart · <kbd>G</kbd> geluid · <kbd>Esc</kbd> pauze`);
 }
 const CONTROLS = {
   drag: '<li><span class="what">Lopen</span>klik op de vloer waar je heen wilt</li><li><span class="what">Kunstwerk bekijken</span>klik erop</li><li><span class="what">Rondkijken</span>houd de muis ingedrukt en sleep</li><li><span class="what">Een stapje</span>het wieltje van de muis</li><li><span class="what">Uit- en inzoomen</span><kbd>−</kbd> en <kbd>+</kbd></li><li><span class="what">Met toetsen</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> of de pijltjes</li><li><span class="what">Menu</span><kbd>Esc</kbd> of de knop linksonder</li>',
@@ -4306,6 +4316,8 @@ $('#soundBtn').onclick = () => { audio.init(); audio.toggle(); syncSoundButton()
 $('#musicBtn').onclick = () => { audio.init(); audio.setMusic(!audio.musicOn); store.set('music', audio.musicOn); syncSoundButton(); };
 $('#helpBtn').onclick = () => { $('#startBtn').textContent = 'Begrepen – verder kijken'; setMode('intro'); };
 $('#menuBtn').onclick = () => setMode('pause');
+$('#hint').addEventListener('click', e => { e.stopPropagation(); $('#hint').classList.add('gone'); store.set('hintClosed', true); });   // tips away with one tap or click
+$('#helpBtn').addEventListener('click', () => { store.set('hintClosed', false); $('#hint').classList.remove('gone'); });                 // 'Uitleg besturing' brings them back
 $('#controlsBtn').onclick = () => {
   const next = scheme === 'lock' ? 'drag' : 'lock'; store.set('controls', next);
   if (document.pointerLockElement) document.exitPointerLock();
